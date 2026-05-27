@@ -62,11 +62,7 @@ Snippet: ${payload.snippet || "No preview available."}
     .eq("user_id", userId)
     .eq("role", "inbox")
     .eq("enabled", true)
-    .single();
-
-  const assistantPrompt =
-    assistant?.system_prompt ||
-    "You are a professional executive email assistant for Nexora.";
+    .maybeSingle();
 
   const { data: knowledge } = await supabaseAdmin
     .from("knowledge_base")
@@ -88,45 +84,86 @@ Content: ${item.content}
           .join("\n---\n")
       : "No additional knowledge.";
 
-  const completion = await openai.chat.completions.create({
-    model: assistant?.model || "gpt-4.1-mini",
-    temperature: assistant?.temperature ?? 0.4,
-    messages: [
-      {
-        role: "system",
-        content: assistantPrompt,
-      },
-      {
-        role: "user",
-        content: `
+  const systemPrompt = `
+You are Maicol's senior AI automation consultant for Nexora.
+
+Your job is not to send polite filler. Your job is to move business conversations forward.
+
+You handle inbound enquiries from people interested in automation, AI systems, Gmail workflows, CRM automation, operations automation, lead handling, and business process automation.
+
+You must sound:
+- human
+- commercially sharp
+- calm
+- useful
+- confident
+- concise
+
+You must NOT sound like:
+- a generic customer service bot
+- a receptionist
+- a corporate template
+- a lazy autoresponder
+
+CRITICAL RULES:
+- Never say "we will review your request".
+- Never say "we will get back to you shortly" unless absolutely unavoidable.
+- Never reply with only an acknowledgement.
+- If the sender is vague, ask intelligent qualifying questions.
+- If they ask for automation, ask what process they want automated, what tools they use, and what outcome they want.
+- If they sound like a lead, move toward a discovery call or next step.
+- Do not invent pricing, timelines, guarantees, or capabilities.
+- Keep the email concise.
+- Always include a clear next step.
+
+RESPONSE STRATEGY:
+1. Acknowledge the enquiry briefly.
+2. Identify the likely intent.
+3. Ask 3-5 useful qualifying questions.
+4. Offer a practical next step.
+5. Sign off professionally.
+
+FORMAT:
+Hello,
+
+[email body]
+
+Kind regards,
+Nexora Team
+
+Return only the email body.
+`;
+
+  const userPrompt = `
 Business knowledge:
 ${knowledgeText}
 
 Email thread:
 ${thread}
 
-Write a professional business email reply.
+Write the best possible reply.
 
-STRICT FORMAT:
-Hello,
+If this is a vague automation enquiry, DO NOT say you will review it.
+Instead, ask smart questions that help qualify the opportunity.
+`;
 
-[reply]
-
-Kind regards,
-Nexora Team
-
-Rules:
-- Do not invent facts.
-- Keep it concise.
-- If information is missing, say we will review and follow up shortly.
-`,
+  const completion = await openai.chat.completions.create({
+    model: assistant?.model || "gpt-4o-mini",
+    temperature: assistant?.temperature ?? 0.7,
+    messages: [
+      {
+        role: "system",
+        content: systemPrompt,
+      },
+      {
+        role: "user",
+        content: userPrompt,
       },
     ],
   });
 
   const draft =
-    completion.choices?.[0]?.message?.content ||
-    "Could not generate reply.";
+    completion.choices?.[0]?.message?.content || "Could not generate reply.";
 
   const { error } = await supabaseAdmin.from("email_approvals").insert({
     user_id: userId,
