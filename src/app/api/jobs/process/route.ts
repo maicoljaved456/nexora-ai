@@ -1,88 +1,81 @@
+import { NextResponse } from "next/server";
+import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
-import { handleJob } from "@/lib/jobHandlers";
 
-const supabaseAdmin = createClient(
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
 export async function POST() {
   try {
-    const { data: jobs, error } = await supabaseAdmin
+    const { data: jobs, error } = await supabase
       .from("jobs")
       .select("*")
       .eq("status", "pending")
-      .order("created_at", { ascending: true })
-      .limit(5);
+      .limit(20);
 
     if (error) {
-      return Response.json({ error: error.message }, { status: 500 });
+      return NextResponse.json(
+        { error: error.message },
+        { status: 500 }
+      );
     }
 
-    if (!jobs || jobs.length === 0) {
-      return Response.json({
-        processed: 0,
-        message: "No pending jobs.",
-      });
-    }
+    for (const job of jobs || []) {
+      const prompt = `
+Write a professional email reply.
 
-    const results = [];
+Subject:
+${job.payload?.subject}
 
-    for (const job of jobs) {
-      try {
-        await supabaseAdmin
-          .from("jobs")
-          .update({
-            status: "processing",
-          })
-          .eq("id", job.id);
+Message:
+${job.payload?.snippet}
+`;
 
-        const result = await handleJob(job);
+      const completion =
+        await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [
+            {
+              role: "user",
+              content: prompt,
+            },
+          ],
+        });
 
-        await supabaseAdmin
-          .from("jobs")
-          .update({
-            status: "completed",
-            result,
-            processed_at: new Date().toISOString(),
-          })
-          .eq("id", job.id);
+      const generatedReply =
+        completion.choices[0].message.content;
 
-        results.push({
-          id: job.id,
+      await supabase
+        .from("approvals")
+        .insert({
+          job_id: job.id,
+          status: "pending",
+          generated_reply: generatedReply,
+        });
+
+      await supabase
+        .from("jobs")
+        .update({
           status: "completed",
-        });
-      } catch (err) {
-        const errorMessage =
-          err instanceof Error ? err.message : "Unknown processing error.";
-
-        await supabaseAdmin
-          .from("jobs")
-          .update({
-            status: "failed",
-            error: errorMessage,
-            retries: (job.retries || 0) + 1,
-            processed_at: new Date().toISOString(),
-          })
-          .eq("id", job.id);
-
-        results.push({
-          id: job.id,
-          status: "failed",
-          error: errorMessage,
-        });
-      }
+          processed_at: new Date().toISOString(),
+        })
+        .eq("id", job.id);
     }
 
-    return Response.json({
-      processed: results.length,
-      results,
+    return NextResponse.json({
+      processed: jobs?.length || 0,
     });
-  } catch (err) {
-    return Response.json(
+  } catch (err: any) {
+    return NextResponse.json(
       {
-        error:
-          err instanceof Error ? err.message : "Job processor failed.",
+        error: err.message,
+        stack: err.stack,
       },
       { status: 500 }
     );
