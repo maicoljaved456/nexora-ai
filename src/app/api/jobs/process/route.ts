@@ -27,23 +27,57 @@ export async function POST() {
     }
 
     for (const job of jobs || []) {
-      const prompt = `
-Write a professional email reply.
+      const subject =
+        job.payload?.subject || "";
 
-Subject:
-${job.payload?.subject}
+      const message =
+        job.payload?.snippet || "";
 
-Message:
-${job.payload?.snippet}
+      const systemPrompt = `
+You are an elite AI executive assistant.
+
+Your job is to:
+- understand the sender intent
+- move conversations forward
+- ask intelligent qualifying questions
+- sound human and professional
+- avoid generic robotic replies
+- avoid saying "we will review your request"
+- avoid sounding like customer support templates
+
+RULES:
+- If enquiry is vague, ask smart follow-up questions.
+- If sales-related, qualify the lead.
+- If support-related, gather troubleshooting details.
+- Keep responses concise but valuable.
+- Sound like a competent founder/operator.
+- Never hallucinate fake capabilities.
+- Never overpromise.
+- Write naturally.
+
+Return only the email body.
+`;
+
+      const userPrompt = `
+SUBJECT:
+${subject}
+
+EMAIL:
+${message}
 `;
 
       const completion =
         await openai.chat.completions.create({
           model: "gpt-4o-mini",
+          temperature: 0.7,
           messages: [
             {
+              role: "system",
+              content: systemPrompt,
+            },
+            {
               role: "user",
-              content: prompt,
+              content: userPrompt,
             },
           ],
         });
