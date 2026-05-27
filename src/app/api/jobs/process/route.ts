@@ -11,6 +11,11 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+function extractEmail(from: string) {
+  const match = from?.match(/<(.+?)>/);
+  return match ? match[1] : from;
+}
+
 export async function POST() {
   try {
     const { data: jobs, error } = await supabase
@@ -27,79 +32,54 @@ export async function POST() {
     }
 
     for (const job of jobs || []) {
-      const subject =
-        job.payload?.subject || "";
+      const payload = job.payload || {};
 
-      const message =
-        job.payload?.snippet || "";
+      const subject = payload.subject || "";
+      const message = payload.snippet || "";
+      const from = payload.from || "";
+      const recipient = payload.recipient || extractEmail(from);
+
+      const replySubject = subject.startsWith("Re:")
+        ? subject
+        : `Re: ${subject || "No subject"}`;
 
       const systemPrompt = `
-You are Maicol's elite AI automation consultant.
+You are Maicol's senior AI automation consultant for Nexora.
 
-Your role is to:
-- handle inbound business enquiries
-- qualify leads intelligently
-- move conversations forward
-- ask strategic follow-up questions
-- sound commercially sharp
-- sound human, concise, and competent
+Your job is to move business conversations forward intelligently.
 
-You are NOT:
-- a generic support bot
-- a passive receptionist
-- a robotic autoresponder
+You must:
+- sound human
+- sound commercially aware
+- ask smart follow-up questions
+- qualify vague leads
+- avoid robotic replies
+- avoid generic support language
 
-CORE BEHAVIOR:
-
-1. If the enquiry is vague:
-Ask smart qualifying questions.
-
-2. If someone wants automation:
-Understand:
-- their business
-- current workflows
-- pain points
-- tools/platforms
-- desired outcome
-
-3. If the message sounds high intent:
-Guide toward next steps.
-
-4. Avoid weak phrases like:
-- "we will review"
-- "thank you for your enquiry"
+Never say:
+- "we will review your request"
 - "we will get back to you shortly"
 
-5. Sound like:
-- founder/operator energy
-- commercially aware
-- proactive
+If the sender is vague:
+- ask useful qualifying questions
+- understand business/process
+- understand tools/workflows
+- understand desired outcome
+
+Keep replies:
 - concise
-- experienced
-
-STYLE:
+- intelligent
+- proactive
 - natural
-- direct
-- modern
-- conversational
-- helpful without sounding needy
 
-GOOD RESPONSE EXAMPLE:
+FORMAT:
 
-"Happy to help.
+Hello,
 
-Could you share a bit more about:
-- what type of business/process you're looking to automate
-- what tools you're currently using
-- where the biggest bottlenecks are right now
+[email body]
 
-That'll help me point you toward the best setup."
-
-BAD RESPONSE EXAMPLE:
-
-"Thank you for your enquiry. We will review your request and revert back shortly."
-
-Never sound like the bad example.
+Kind regards,
+Nexora Team
 
 Return ONLY the email body.
 `;
@@ -110,39 +90,64 @@ ${subject}
 
 EMAIL:
 ${message}
+
+Write the best possible business reply.
+
+If the enquiry is vague, ask strategic follow-up questions instead of sending a generic acknowledgement.
 `;
 
-      const completion =
-        await openai.chat.completions.create({
-          model: "gpt-4o-mini",
-          temperature: 0.7,
-          messages: [
-            {
-              role: "system",
-              content: systemPrompt,
-            },
-            {
-              role: "user",
-              content: userPrompt,
-            },
-          ],
-        });
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        temperature: 0.7,
+        messages: [
+          {
+            role: "system",
+            content: systemPrompt,
+          },
+          {
+            role: "user",
+            content: userPrompt,
+          },
+        ],
+      });
 
       const generatedReply =
-        completion.choices[0].message.content;
+        completion.choices?.[0]?.message?.content ||
+        "Could not generate reply.";
 
-      await supabase
-        .from("approvals")
+      const { error: approvalError } = await supabase
+        .from("email_approvals")
         .insert({
-          job_id: job.id,
+          user_id: job.user_id,
+          recipient,
+          subject: replySubject,
+          body: generatedReply,
+          gmail_thread_id: payload.threadId || "",
+          source_message_id: payload.messageId || "",
           status: "pending",
-          generated_reply: generatedReply,
         });
+
+      if (approvalError) {
+        await supabase
+          .from("jobs")
+          .update({
+            status: "failed",
+            error: approvalError.message,
+            processed_at: new Date().toISOString(),
+          })
+          .eq("id", job.id);
+
+        continue;
+      }
 
       await supabase
         .from("jobs")
         .update({
           status: "completed",
+          result: {
+            approvalCreated: true,
+            generatedReply,
+          },
           processed_at: new Date().toISOString(),
         })
         .eq("id", job.id);
