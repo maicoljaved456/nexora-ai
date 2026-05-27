@@ -35,7 +35,11 @@ async function handleGenerateEmailReply(job: any) {
   const payload = job.payload || {};
 
   const userId = payload.userId || job.user_id;
-  const recipient = payload.recipient || extractEmail(payload.from || "");
+
+  const recipient =
+    payload.recipient ||
+    extractEmail(payload.from || "");
+
   const subject = payload.subject?.startsWith("Re:")
     ? payload.subject
     : `Re: ${payload.subject || "No subject"}`;
@@ -49,11 +53,15 @@ Snippet: ${payload.snippet || "No preview available."}
 `;
 
   if (!userId) {
-    throw new Error("Missing userId for generate_email_reply job.");
+    throw new Error(
+      "Missing userId for generate_email_reply job."
+    );
   }
 
   if (!recipient) {
-    throw new Error("Missing recipient for generate_email_reply job.");
+    throw new Error(
+      "Missing recipient for generate_email_reply job."
+    );
   }
 
   const { data: assistant } = await supabaseAdmin
@@ -87,43 +95,34 @@ Content: ${item.content}
   const systemPrompt = `
 You are Maicol's senior AI automation consultant for Nexora.
 
-Your job is not to send polite filler. Your job is to move business conversations forward.
+Your job is to move business conversations forward intelligently.
 
-You handle inbound enquiries from people interested in automation, AI systems, Gmail workflows, CRM automation, operations automation, lead handling, and business process automation.
+You must:
+- sound human
+- sound commercially aware
+- ask smart follow-up questions
+- qualify vague leads
+- avoid robotic replies
+- avoid generic support language
 
-You must sound:
-- human
-- commercially sharp
-- calm
-- useful
-- confident
+Never say:
+- "we will review your request"
+- "we will get back to you shortly"
+
+If the sender is vague:
+- ask useful qualifying questions
+- understand business/process
+- understand tools/workflows
+- understand desired outcome
+
+Keep replies:
 - concise
-
-You must NOT sound like:
-- a generic customer service bot
-- a receptionist
-- a corporate template
-- a lazy autoresponder
-
-CRITICAL RULES:
-- Never say "we will review your request".
-- Never say "we will get back to you shortly" unless absolutely unavoidable.
-- Never reply with only an acknowledgement.
-- If the sender is vague, ask intelligent qualifying questions.
-- If they ask for automation, ask what process they want automated, what tools they use, and what outcome they want.
-- If they sound like a lead, move toward a discovery call or next step.
-- Do not invent pricing, timelines, guarantees, or capabilities.
-- Keep the email concise.
-- Always include a clear next step.
-
-RESPONSE STRATEGY:
-1. Acknowledge the enquiry briefly.
-2. Identify the likely intent.
-3. Ask 3-5 useful qualifying questions.
-4. Offer a practical next step.
-5. Sign off professionally.
+- intelligent
+- proactive
+- natural
 
 FORMAT:
+
 Hello,
 
 [email body]
@@ -131,7 +130,7 @@ Hello,
 Kind regards,
 Nexora Team
 
-Return only the email body.
+Return ONLY the email body.
 `;
 
   const userPrompt = `
@@ -141,39 +140,50 @@ ${knowledgeText}
 Email thread:
 ${thread}
 
-Write the best possible reply.
+Write the best possible business reply.
 
-If this is a vague automation enquiry, DO NOT say you will review it.
-Instead, ask smart questions that help qualify the opportunity.
+If the enquiry is vague, ask strategic follow-up questions instead of sending a generic acknowledgement.
 `;
 
-  const completion = await openai.chat.completions.create({
-    model: assistant?.model || "gpt-4o-mini",
-    temperature: assistant?.temperature ?? 0.7,
-    messages: [
-      {
-        role: "system",
-        content: systemPrompt,
-      },
-      {
-        role: "user",
-        content: userPrompt,
-      },
-    ],
-  });
+  const completion =
+    await openai.chat.completions.create({
+      model: assistant?.model || "gpt-4o-mini",
+      temperature: assistant?.temperature ?? 0.7,
+      messages: [
+        {
+          role: "system",
+          content: systemPrompt,
+        },
+        {
+          role: "user",
+          content: userPrompt,
+        },
+      ],
+    });
 
   const draft =
-    completion.choices?.[0]?.message?.content || "Could not generate reply.";
+    completion.choices?.[0]?.message?.content ||
+    "Could not generate reply.";
 
-  const { error } = await supabaseAdmin.from("email_approvals").insert({
-    user_id: userId,
-    recipient,
-    subject,
-    body: draft,
-    gmail_thread_id: payload.threadId || "",
-    source_message_id: payload.messageId || "",
-    status: "pending",
-  });
+  const { data, error } = await supabaseAdmin
+    .from("email_approvals")
+    .insert({
+      user_id: userId,
+      recipient,
+      subject,
+      body: draft,
+      gmail_thread_id: payload.threadId || "",
+      source_message_id:
+        payload.messageId || "",
+      status: "pending",
+    })
+    .select();
+
+  console.log(
+    "EMAIL APPROVAL INSERT:",
+    data,
+    error
+  );
 
   if (error) {
     throw new Error(error.message);
