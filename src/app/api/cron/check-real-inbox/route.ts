@@ -16,19 +16,15 @@ export async function GET(request: Request) {
   const isVercelCron = vercelCronHeader === "1";
 
   if (!isLocalAuthorized && !isVercelCron) {
-    return NextResponse.json(
-      { error: "Unauthorized" },
-      { status: 401 }
-    );
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const createdJobs = [];
 
   try {
-    const { data: connections, error: connectionError } =
-      await supabase
-        .from("gmail_connections")
-        .select("*");
+    const { data: connections, error: connectionError } = await supabase
+      .from("gmail_connections")
+      .select("*");
 
     if (connectionError) {
       return NextResponse.json(
@@ -55,6 +51,17 @@ export async function GET(request: Request) {
       }
 
       for (const message of gmailData.messages || []) {
+        const { data: processedMessage } = await supabase
+          .from("processed_gmail_messages")
+          .select("id")
+          .eq("user_id", connection.user_id)
+          .eq("gmail_message_id", message.id)
+          .maybeSingle();
+
+        if (processedMessage) {
+          continue;
+        }
+
         const { data: existingJob } = await supabase
           .from("jobs")
           .select("id")
@@ -85,24 +92,21 @@ export async function GET(request: Request) {
         const headers = detail.payload?.headers || [];
 
         const subject =
-          headers.find((h: any) =>
-            h.name?.toLowerCase() === "subject"
-          )?.value || "No Subject";
+          headers.find((h: any) => h.name?.toLowerCase() === "subject")
+            ?.value || "No Subject";
 
         const from =
-          headers.find((h: any) =>
-            h.name?.toLowerCase() === "from"
-          )?.value || "Unknown Sender";
+          headers.find((h: any) => h.name?.toLowerCase() === "from")?.value ||
+          "Unknown Sender";
 
         const snippet = detail.snippet || "";
 
-        const { data: rules, error: rulesError } =
-          await supabase
-            .from("automation_rules")
-            .select("*")
-            .eq("enabled", true)
-            .eq("trigger_type", "new_email")
-            .eq("user_id", connection.user_id);
+        const { data: rules, error: rulesError } = await supabase
+          .from("automation_rules")
+          .select("*")
+          .eq("enabled", true)
+          .eq("trigger_type", "new_email")
+          .eq("user_id", connection.user_id);
 
         if (rulesError) {
           console.error("Rules error:", rulesError);
@@ -112,33 +116,29 @@ export async function GET(request: Request) {
         let jobsCreatedForMessage = 0;
 
         for (const rule of rules || []) {
-          const { data: job, error: jobError } =
-            await supabase
-              .from("jobs")
-              .insert({
-                user_id: connection.user_id,
-                type: rule.action_type,
-                status: "pending",
-                payload: {
-                  triggerType: "new_email",
-                  source: "real_gmail_inbox",
-                  from,
-                  subject,
-                  snippet,
-                  messageId: message.id,
-                  threadId: detail.threadId,
-                  ruleId: rule.id,
-                  ruleName: rule.name,
-                },
-              })
-              .select()
-              .single();
+          const { data: job, error: jobError } = await supabase
+            .from("jobs")
+            .insert({
+              user_id: connection.user_id,
+              type: rule.action_type,
+              status: "pending",
+              payload: {
+                triggerType: "new_email",
+                source: "real_gmail_inbox",
+                from,
+                subject,
+                snippet,
+                messageId: message.id,
+                threadId: detail.threadId,
+                ruleId: rule.id,
+                ruleName: rule.name,
+              },
+            })
+            .select()
+            .single();
 
           if (jobError) {
-            console.error(
-              "Job insert error:",
-              jobError
-            );
+            console.error("Job insert error:", jobError);
             continue;
           }
 
@@ -147,6 +147,19 @@ export async function GET(request: Request) {
         }
 
         if (jobsCreatedForMessage > 0) {
+          const { error: processedError } = await supabase
+            .from("processed_gmail_messages")
+            .insert({
+              user_id: connection.user_id,
+              gmail_message_id: message.id,
+              gmail_thread_id: detail.threadId,
+              subject,
+            });
+
+          if (processedError) {
+            console.error("Processed message insert error:", processedError);
+          }
+
           const markReadRes = await fetch(
             `https://gmail.googleapis.com/gmail/v1/users/me/messages/${message.id}/modify`,
             {
@@ -162,13 +175,8 @@ export async function GET(request: Request) {
           );
 
           if (!markReadRes.ok) {
-            const markReadError =
-              await markReadRes.json();
-
-            console.error(
-              "Failed to mark email as read:",
-              markReadError
-            );
+            const markReadError = await markReadRes.json();
+            console.error("Failed to mark email as read:", markReadError);
           }
         }
       }
@@ -182,9 +190,7 @@ export async function GET(request: Request) {
   } catch (err: any) {
     return NextResponse.json(
       {
-        error:
-          err.message ||
-          "Real inbox check failed.",
+        error: err.message || "Real inbox check failed.",
       },
       { status: 500 }
     );
