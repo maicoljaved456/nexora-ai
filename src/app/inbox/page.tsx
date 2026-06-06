@@ -4,29 +4,20 @@ import { useState } from "react";
 import Sidebar from "@/components/dashboard/Sidebar";
 import Topbar from "@/components/dashboard/Topbar";
 import { supabase } from "@/lib/supabase";
-import { loadAssistant } from "@/lib/loadAssistant";
-import { loadKnowledge } from "@/lib/loadKnowledge";
-import { processAutomationRules } from "@/lib/processAutomationRules";
 
 import {
-  buildInboxSummaryPrompt,
-  buildProfessionalReplyPrompt,
-  buildUrgencyPrompt,
-} from "@/lib/prompts";
-
-import {
-  Mail,
-  RefreshCw,
-  User,
-  CalendarDays,
-  Sparkles,
-  Copy,
   AlertTriangle,
-  Send,
+  CalendarDays,
+  Copy,
   Inbox,
-  Zap,
-  ShieldCheck,
+  Mail,
   PenLine,
+  RefreshCw,
+  Send,
+  ShieldCheck,
+  Sparkles,
+  User,
+  Zap,
 } from "lucide-react";
 
 type GmailMessage = {
@@ -39,19 +30,156 @@ type GmailMessage = {
 };
 
 type ThreadMessage = {
-  id: string;
   from: string;
   to: string;
-  subject: string;
   date: string;
-  body: string;
-  snippet: string;
+  subject: string;
+  body?: string;
+  snippet?: string;
 };
+
+function extractEmail(from: string) {
+  const match = from?.match(/<(.+?)>/);
+  return match ? match[1] : from;
+}
+
+async function loadAssistant(role: string) {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    throw new Error("No authenticated user.");
+  }
+
+  const { data, error } = await supabase
+    .from("assistants")
+    .select("*")
+    .eq("user_id", user.id)
+    .eq("role", role)
+    .eq("enabled", true)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (
+    data || {
+      name: "Inbox Assistant",
+      role,
+    }
+  );
+}
+
+async function loadKnowledge(category: string) {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    throw new Error("No authenticated user.");
+  }
+
+  const { data, error } = await supabase
+    .from("knowledge_base")
+    .select("*")
+    .eq("user_id", user.id)
+    .eq("enabled", true)
+    .eq("category", category);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data || [];
+}
+
+function formatKnowledge(knowledge: any[]) {
+  if (!knowledge || knowledge.length === 0) {
+    return "No additional knowledge available.";
+  }
+
+  return knowledge
+    .map(
+      (item, index) => `
+Knowledge ${index + 1}
+Title: ${item.title}
+Content: ${item.content}
+`
+    )
+    .join("\n---\n");
+}
+
+function buildInboxSummaryPrompt(thread: string, knowledge: any[]) {
+  return `
+Business knowledge:
+${formatKnowledge(knowledge)}
+
+Email thread:
+${thread}
+
+Summarise this email thread clearly.
+
+Return:
+- sender intent
+- key details
+- urgency
+- recommended next action
+`;
+}
+
+function buildProfessionalReplyPrompt(thread: string, knowledge: any[]) {
+  return `
+Business knowledge:
+${formatKnowledge(knowledge)}
+
+Email thread:
+${thread}
+
+Write a strong professional reply.
+
+Rules:
+- Sound human and commercially sharp.
+- If the sender is vague, ask intelligent follow-up questions.
+- Do not say "we will review your request".
+- Do not say "we will get back to you shortly".
+- Move the conversation forward.
+- Keep it concise.
+
+Format:
+
+Hello,
+
+[email body]
+
+Kind regards,
+Nexora Team
+`;
+}
+
+function buildUrgencyPrompt(thread: string, knowledge: any[]) {
+  return `
+Business knowledge:
+${formatKnowledge(knowledge)}
+
+Email thread:
+${thread}
+
+Classify urgency.
+
+Return:
+- urgency: low / medium / high
+- reason
+- recommended next action
+`;
+}
 
 export default function InboxPage() {
   const [messages, setMessages] = useState<GmailMessage[]>([]);
   const [loading, setLoading] = useState(false);
-  const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
   const [summaries, setSummaries] = useState<Record<string, string>>({});
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [urgencies, setUrgencies] = useState<Record<string, string>>({});
@@ -59,13 +187,8 @@ export default function InboxPage() {
   const [approvalStatus, setApprovalStatus] = useState<Record<string, string>>(
     {}
   );
-  const [automationMessage, setAutomationMessage] = useState("");
-  const [error, setError] = useState("");
 
-  function extractEmail(from: string) {
-    const match = from.match(/<(.+?)>/);
-    return match ? match[1] : from;
-  }
+  const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
 
   async function getProviderToken() {
     const {
@@ -86,7 +209,6 @@ export default function InboxPage() {
   async function loadMessages() {
     setLoading(true);
     setError("");
-    setAutomationMessage("");
 
     const providerToken = await getProviderToken();
 
@@ -122,35 +244,6 @@ export default function InboxPage() {
     });
 
     setRecipients(initialRecipients);
-
-    try {
-      if (loadedMessages.length > 0) {
-        const latestMessage = loadedMessages[0];
-
-        const automationResult = await processAutomationRules({
-          triggerType: "new_email",
-          payload: {
-            source: "inbox_load",
-            messageId: latestMessage.id,
-            threadId: latestMessage.threadId,
-            subject: latestMessage.subject,
-            from: latestMessage.from,
-            snippet: latestMessage.snippet,
-          },
-        });
-
-        setAutomationMessage(
-          `Automation checked: ${automationResult.created} job(s) created.`
-        );
-      }
-    } catch (err) {
-      setAutomationMessage(
-        err instanceof Error
-          ? `Automation error: ${err.message}`
-          : "Automation error."
-      );
-    }
-
     setLoading(false);
   }
 
@@ -218,8 +311,7 @@ ${item.body || item.snippet || "No body available."}
 
       setSummaries((current) => ({
         ...current,
-        [message.id]:
-          data.output || data.error || "Could not summarise message.",
+        [message.id]: data.output || data.error || "Could not summarise message.",
       }));
     } catch (err) {
       setSummaries((current) => ({
@@ -255,8 +347,7 @@ ${item.body || item.snippet || "No body available."}
 
       setDrafts((current) => ({
         ...current,
-        [message.id]:
-          data.output || data.error || "Could not draft reply.",
+        [message.id]: data.output || data.error || "Could not draft reply.",
       }));
     } catch (err) {
       setDrafts((current) => ({
@@ -310,7 +401,9 @@ ${item.body || item.snippet || "No body available."}
     const userId = await getCurrentUserId();
     const draft = drafts[message.id];
     const recipient = recipients[message.id];
-    const subject = `Re: ${message.subject}`;
+    const subject = message.subject?.startsWith("Re:")
+      ? message.subject
+      : `Re: ${message.subject}`;
 
     if (!userId || !draft || !recipient) {
       setApprovalStatus((current) => ({
@@ -372,7 +465,7 @@ ${item.body || item.snippet || "No body available."}
 
             <p className="mt-4 max-w-3xl text-base leading-7 text-slate-400 lg:text-lg">
               Read Gmail threads, detect priorities, draft context-aware
-              replies, and trigger automation rules.
+              replies, and send drafts to approval.
             </p>
           </div>
 
@@ -404,12 +497,6 @@ ${item.body || item.snippet || "No body available."}
               </button>
             </div>
 
-            {automationMessage && (
-              <div className="mt-6 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4 text-sm text-emerald-300">
-                {automationMessage}
-              </div>
-            )}
-
             {error && (
               <div className="mt-6 rounded-2xl border border-red-400/20 bg-red-500/10 p-4 text-sm text-red-300">
                 {error}
@@ -426,7 +513,7 @@ ${item.body || item.snippet || "No body available."}
                   </p>
 
                   <p className="mt-2 text-sm text-slate-500">
-                    Click “Load Gmail Messages” to get started.
+                    Click “Load Gmail Messages” to view inbox messages.
                   </p>
                 </div>
               )}
@@ -598,7 +685,7 @@ ${item.body || item.snippet || "No body available."}
               <h3 className="text-xl font-bold text-white">Smart Drafts</h3>
 
               <p className="mt-3 leading-7 text-slate-400">
-                Drafts are routed to approvals before sending.
+                Drafts can be routed to approvals before sending.
               </p>
             </div>
 
