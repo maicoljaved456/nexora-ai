@@ -1,4 +1,4 @@
-"use client";
+ "use client";
 
 import { useEffect, useState } from "react";
 import Sidebar from "@/components/dashboard/Sidebar";
@@ -81,6 +81,27 @@ export default function JobsPage() {
     setCreating(false);
   }
 
+  async function checkInboxNow() {
+    setMessage("");
+
+    try {
+      const res = await fetch("/api/manual/check-inbox", {
+        method: "POST",
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setMessage(data.error || "Inbox check failed.");
+      } else {
+        setMessage(`Inbox checked. ${data.jobsCreated || 0} job(s) created.`);
+        await loadJobs();
+      }
+    } catch {
+      setMessage("Inbox check failed.");
+    }
+  }
+
   async function processJobs() {
     setProcessing(true);
     setMessage("");
@@ -142,9 +163,7 @@ export default function JobsPage() {
                 </div>
 
                 <div>
-                  <h2 className="text-2xl font-bold text-white">
-                    Job Queue
-                  </h2>
+                  <h2 className="text-2xl font-bold text-white">Job Queue</h2>
 
                   <p className="mt-1 text-slate-400">
                     Supabase-backed task history.
@@ -160,6 +179,14 @@ export default function JobsPage() {
                 >
                   <Plus size={18} />
                   {creating ? "Creating..." : "Create Test Job"}
+                </button>
+
+                <button
+                  onClick={checkInboxNow}
+                  className="flex items-center justify-center gap-2 rounded-2xl border border-amber-400/20 bg-amber-500/10 px-5 py-4 text-sm font-bold text-amber-300 transition hover:bg-amber-500/20"
+                >
+                  <RefreshCw size={18} />
+                  Check Inbox Now
                 </button>
 
                 <button
