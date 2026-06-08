@@ -11,6 +11,7 @@ import {
   Clock,
   Plus,
   PlayCircle,
+  Sparkles,
 } from "lucide-react";
 
 type Job = {
@@ -102,6 +103,33 @@ export default function JobsPage() {
     }
   }
 
+  async function runInboxAI() {
+    setProcessing(true);
+    setMessage("");
+
+    try {
+      const res = await fetch("/api/manual/run-inbox-ai", {
+        method: "POST",
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setMessage(data.error || "Run AI Inbox failed.");
+      } else {
+        setMessage(
+          `Inbox checked. ${data.inbox?.jobsCreated || 0} job(s) created. Processed ${data.processing?.processed || 0} job(s).`
+        );
+
+        await loadJobs();
+      }
+    } catch {
+      setMessage("Run AI Inbox failed.");
+    }
+
+    setProcessing(false);
+  }
+
   async function processJobs() {
     setProcessing(true);
     setMessage("");
@@ -171,7 +199,7 @@ export default function JobsPage() {
                 </div>
               </div>
 
-              <div className="flex flex-col gap-3 sm:flex-row">
+              <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
                 <button
                   onClick={createTestJob}
                   disabled={creating}
@@ -187,6 +215,15 @@ export default function JobsPage() {
                 >
                   <RefreshCw size={18} />
                   Check Inbox Now
+                </button>
+
+                <button
+                  onClick={runInboxAI}
+                  disabled={processing}
+                  className="flex items-center justify-center gap-2 rounded-2xl border border-purple-400/20 bg-purple-500/10 px-5 py-4 text-sm font-bold text-purple-300 transition hover:bg-purple-500/20 disabled:opacity-50"
+                >
+                  <Sparkles size={18} />
+                  {processing ? "Running..." : "Run AI Inbox"}
                 </button>
 
                 <button
@@ -242,10 +279,10 @@ export default function JobsPage() {
                           job.status === "completed"
                             ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-300"
                             : job.status === "failed"
-                            ? "border-red-400/20 bg-red-500/10 text-red-300"
-                            : job.status === "processing"
-                            ? "border-cyan-400/20 bg-cyan-500/10 text-cyan-300"
-                            : "border-amber-400/20 bg-amber-500/10 text-amber-300"
+                              ? "border-red-400/20 bg-red-500/10 text-red-300"
+                              : job.status === "processing"
+                                ? "border-cyan-400/20 bg-cyan-500/10 text-cyan-300"
+                                : "border-amber-400/20 bg-amber-500/10 text-amber-300"
                         }`}
                       >
                         {job.status}
